@@ -1313,6 +1313,69 @@ def test_messages_with_carryover():
     assert len(generated_message["content"]) == 2
 
 
+def test_adding_duplicate_function_warning():
+    config_list = autogen.config_list_from_json(
+        OAI_CONFIG_LIST,
+        file_location=KEY_LOC,
+    )
+
+    agent = autogen.ConversableAgent(
+        "jtoy",
+        llm_config={
+            "config_list": config_list,
+            "model": "gpt-3.5-turbo-0613",
+        },
+    )
+
+    def sample_function():
+        pass
+
+    agent.register_function(
+        function_map={
+            "sample_function": sample_function,
+        }
+    )
+    agent.update_function_signature(
+        {
+            "name": "foo",
+        },
+        is_remove=False,
+    )
+    agent.update_tool_signature(
+        {
+            "type": "function",
+            "function": {
+                "name": "yo",
+            },
+        },
+        is_remove=False,
+    )
+
+    with pytest.warns(UserWarning, match="Function 'sample_function' is being overridden."):
+        agent.register_function(
+            function_map={
+                "sample_function": sample_function,
+            }
+        )
+    with pytest.warns(UserWarning, match="Function 'foo' is being overridden."):
+        agent.update_function_signature(
+            {
+                "name": "foo",
+            },
+            is_remove=False,
+        )
+    with pytest.warns(UserWarning, match="Function 'yo' is being overridden."):
+        agent.update_tool_signature(
+            {
+                "type": "function",
+                "function": {
+                    "name": "yo",
+                },
+            },
+            is_remove=False,
+        )
+
+
 if __name__ == "__main__":
     # test_trigger()
     # test_context()
@@ -1324,3 +1387,4 @@ if __name__ == "__main__":
     # test_process_before_send()
     test_message_func()
     test_summary()
+    test_adding_duplicate_function_warning()
