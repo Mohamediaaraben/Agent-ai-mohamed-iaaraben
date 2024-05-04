@@ -8,7 +8,9 @@ using AutoGen.SemanticKernel;
 using AutoGen.SemanticKernel.Extension;
 using FluentAssertions;
 using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.SemanticKernel.Connectors.OpenAI;
 
 namespace AutoGen.Tests;
 
@@ -34,8 +36,13 @@ public partial class SemanticKernelAgentTest
             .AddAzureOpenAIChatCompletion("gpt-35-turbo-16k", endpoint, key);
 
         var kernel = builder.Build();
+        var agent = new ChatCompletionAgent()
+        {
+            Kernel = kernel,
+            Name = "ExampleAgent"
+        };
 
-        var skAgent = new SemanticKernelAgent(kernel, "assistant");
+        var skAgent = new SemanticKernelAgent(agent, "assistant");
 
         var chatMessageContent = MessageEnvelope.Create(new ChatMessageContent(AuthorRole.Assistant, "Hello"));
         var reply = await skAgent.SendAsync(chatMessageContent);
@@ -48,8 +55,8 @@ public partial class SemanticKernelAgentTest
 
         await foreach (var streamingMessage in streamingReply)
         {
-            streamingMessage.Should().BeOfType<MessageEnvelope<StreamingChatMessageContent>>();
-            streamingMessage.As<MessageEnvelope<StreamingChatMessageContent>>().From.Should().Be("assistant");
+            streamingMessage.Should().BeOfType<MessageEnvelope<ChatMessageContent>>();
+            streamingMessage.As<MessageEnvelope<ChatMessageContent>>().From.Should().Be("assistant");
         }
     }
 
@@ -62,9 +69,14 @@ public partial class SemanticKernelAgentTest
             .AddAzureOpenAIChatCompletion("gpt-35-turbo-16k", endpoint, key);
 
         var kernel = builder.Build();
+        var agent = new ChatCompletionAgent()
+        {
+            Kernel = kernel,
+            Name = "ExampleAgent"
+        };
 
         var connector = new SemanticKernelChatMessageContentConnector();
-        var skAgent = new SemanticKernelAgent(kernel, "assistant")
+        var skAgent = new SemanticKernelAgent(agent, "assistant")
             .RegisterStreamingMiddleware(connector)
             .RegisterMiddleware(connector);
 
@@ -94,8 +106,8 @@ public partial class SemanticKernelAgentTest
 
             await foreach (var streamingMessage in reply)
             {
-                streamingMessage.Should().BeOfType<TextMessageUpdate>();
-                streamingMessage.As<TextMessageUpdate>().From.Should().Be("assistant");
+                streamingMessage.Should().BeOfType<TextMessage>();
+                streamingMessage.As<TextMessage>().From.Should().Be("assistant");
             }
         }
     }
@@ -118,8 +130,14 @@ public partial class SemanticKernelAgentTest
         var function = KernelFunctionFactory.CreateFromMethod(this.GetWeatherAsync, this.GetWeatherAsyncFunctionContract.Name, this.GetWeatherAsyncFunctionContract.Description, parameters);
         builder.Plugins.AddFromFunctions("plugins", [function]);
         var kernel = builder.Build();
+        var agent = new ChatCompletionAgent()
+        {
+            Kernel = kernel,
+            Name = "ExampleAgent",
+            ExecutionSettings = new OpenAIPromptExecutionSettings() { ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions },
+        };
 
-        var skAgent = new SemanticKernelAgent(kernel, "assistant")
+        var skAgent = new SemanticKernelAgent(agent, "assistant")
             .RegisterMessageConnector();
 
         skAgent.Middlewares.Count().Should().Be(1);
