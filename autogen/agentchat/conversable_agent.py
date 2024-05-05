@@ -37,6 +37,19 @@ from .agent import Agent, LLMAgent
 from .chat import ChatResult, a_initiate_chats, initiate_chats
 from .utils import consolidate_chat_info, gather_usage_summary
 
+agentops = None
+try:
+    import agentops
+    from agentops import ActionEvent, ErrorEvent, ToolEvent, record, track_agent
+except ImportError:
+
+    def track_agent():
+        def noop(f):
+            return f
+
+        return noop
+
+
 __all__ = ("ConversableAgent",)
 
 logger = logging.getLogger(__name__)
@@ -44,6 +57,7 @@ logger = logging.getLogger(__name__)
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+@track_agent()
 class ConversableAgent(LLMAgent):
     """(In preview) A class for generic conversable agents which can be configured as assistant or user proxy.
 
@@ -134,6 +148,7 @@ class ConversableAgent(LLMAgent):
         )
 
         self._name = name
+        self.agent_ops_agent_name = name
         # a dictionary of conversations, default value is list
         if chat_messages is None:
             self._oai_messages = defaultdict(list)
@@ -643,16 +658,29 @@ class ConversableAgent(LLMAgent):
         Raises:
             ValueError: if the message can't be converted into a valid ChatCompletion message.
         """
+        action_event = (
+            ActionEvent(
+                action_type="send_to_agent",
+                params={"sender": self.agent_ops_agent_name, "recipient": recipient.name, "message": message},
+            )
+            if agentops
+            else None
+        )
         message = self._process_message_before_send(message, recipient, silent)
         # When the agent composes and sends the message, the role of the message is "assistant"
         # unless it's "function".
         valid = self._append_oai_message(message, "assistant", recipient)
         if valid:
+            if agentops:
+                record(action_event)
             recipient.receive(message, self, request_reply, silent)
         else:
-            raise ValueError(
+            e = ValueError(
                 "Message can't be converted into a valid ChatCompletion message. Either content or function_call must be provided."
             )
+            if agentops:
+                record(ErrorEvent(trigger_event=action_event, exception=e))
+            raise e
 
     async def a_send(
         self,
@@ -693,16 +721,29 @@ class ConversableAgent(LLMAgent):
         Raises:
             ValueError: if the message can't be converted into a valid ChatCompletion message.
         """
+        action_event = (
+            ActionEvent(
+                action_type="async_send_to_agent",
+                params={"sender": self.agent_ops_agent_name, "recipient": recipient.name, "message": message},
+            )
+            if agentops
+            else None
+        )
         message = self._process_message_before_send(message, recipient, silent)
         # When the agent composes and sends the message, the role of the message is "assistant"
         # unless it's "function".
         valid = self._append_oai_message(message, "assistant", recipient)
         if valid:
+            if agentops:
+                record(action_event)
             await recipient.a_receive(message, self, request_reply, silent)
         else:
-            raise ValueError(
+            e = ValueError(
                 "Message can't be converted into a valid ChatCompletion message. Either content or function_call must be provided."
             )
+            if agentops:
+                record(ErrorEvent(trigger_event=action_event, exception=e))
+            raise e
 
     def _print_received_message(self, message: Union[Dict, str], sender: Agent):
         iostream = IOStream.get_default()
@@ -808,6 +849,13 @@ class ConversableAgent(LLMAgent):
         Raises:
             ValueError: if the message can't be converted into a valid ChatCompletion message.
         """
+        if agentops:
+            record(
+                ActionEvent(
+                    action_type="receive_from_agent",
+                    params={"sender": sender.name, "recipient": self.name, "message": message},
+                )
+            )
         self._process_received_message(message, sender, silent)
         if request_reply is False or request_reply is None and self.reply_at_receive[sender] is False:
             return
@@ -845,6 +893,13 @@ class ConversableAgent(LLMAgent):
         Raises:
             ValueError: if the message can't be converted into a valid ChatCompletion message.
         """
+        if agentops:
+            record(
+                ActionEvent(
+                    action_type="async_receive_from_agent",
+                    params={"sender": sender.name, "recipient": self.name, "message": message},
+                )
+            )
         self._process_received_message(message, sender, silent)
         if request_reply is False or request_reply is None and self.reply_at_receive[sender] is False:
             return
@@ -2486,7 +2541,7 @@ class ConversableAgent(LLMAgent):
         """Return the function map."""
         return self._function_map
 
-    def _wrap_function(self, func: F) -> F:
+    def _wrap_function(self, func: F, name: Optional[str] = None) -> F:
         """Wrap the function to dump the return value to json.
 
         Handles both sync and async functions.
@@ -2501,15 +2556,38 @@ class ConversableAgent(LLMAgent):
         @load_basemodels_if_needed
         @functools.wraps(func)
         def _wrapped_func(*args, **kwargs):
-            retval = func(*args, **kwargs)
-
-            return serialize_to_str(retval)
+            if agentops:
+                tool_event = ToolEvent(params={"args": args, "kwargs": kwargs}, name=name or func.__name__)
+                try:
+                    retval = func(*args, **kwargs)
+                    retval_str = serialize_to_str(retval)
+                    tool_event.returns = retval_str
+                    record(tool_event)
+                    return retval_str
+                except Exception as e:
+                    record(ErrorEvent(trigger_event=tool_event, exception=e))
+                    raise e
+            else:
+                retval = func(*args, **kwargs)
+                return serialize_to_str(retval)
 
         @load_basemodels_if_needed
         @functools.wraps(func)
         async def _a_wrapped_func(*args, **kwargs):
-            retval = await func(*args, **kwargs)
-            return serialize_to_str(retval)
+            if agentops:
+                tool_event = ToolEvent(params={"args": args, "kwargs": kwargs}, name=name or func.__name__)
+                try:
+                    retval = await func(*args, **kwargs)
+                    retval_str = serialize_to_str(retval)
+                    tool_event.returns = retval_str
+                    record(tool_event)
+                    return retval_str
+                except Exception as e:
+                    record(ErrorEvent(trigger_event=tool_event, exception=e))
+                    raise e
+            else:
+                retval = func(*args, **kwargs)
+                return serialize_to_str(retval)
 
         wrapped_func = _a_wrapped_func if inspect.iscoroutinefunction(func) else _wrapped_func
 
@@ -2654,7 +2732,7 @@ class ConversableAgent(LLMAgent):
             elif not hasattr(func, "_name"):
                 func._name = func.__name__
 
-            self.register_function({func._name: self._wrap_function(func)})
+            self.register_function({func._name: self._wrap_function(func, func._name)})
 
             return func
 
