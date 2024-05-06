@@ -17,6 +17,7 @@ from test_assistant_agent import KEY_LOC, OAI_CONFIG_LIST  # noqa: E402
 try:
     import fastembed
     from qdrant_client import QdrantClient
+    from qdrant_client.fastembed_common import QueryResponse
 
     from autogen.agentchat.contrib.qdrant_retrieve_user_proxy_agent import (
         QdrantRetrieveUserProxyAgent,
@@ -102,7 +103,6 @@ def test_qdrant_search():
 
     assert client.get_collection("all-my-documents")
 
-    # Perform a semantic search without any filter
     results = query_qdrant(["autogen"], client=client)
     assert isinstance(results, dict) and any("autogen" in res[0].lower() for res in results.get("documents", []))
 
